@@ -9,55 +9,76 @@ app.use(cors());
 const server = http.createServer(app);
 
 const io = new Server(server, {
-  cors: { origin: "*" }
+  cors: {
+    origin: "*",
+  },
 });
 
+// temporary in-memory storage
 const rooms = {};
 
-function makeCode() {
-  return Math.random().toString(36).substring(2, 7).toUpperCase();
-}
+io.on("connection", (socket) => {
+  console.log("🟢 Player connected:", socket.id);
 
-io.on("connection", socket => {
+  // CREATE GAME
+  socket.on("createGame", (playerName, cb) => {
+    const roomCode = Math.random()
+      .toString(36)
+      .substring(2, 7)
+      .toUpperCase();
 
-  socket.on("createRoom", name => {
-    const code = makeCode();
-    rooms[code] = { players: {}, started: false };
-    rooms[code].players[socket.id] = { name, time: 0, finished: false };
-    socket.join(code);
-    io.to(code).emit("updateLobby", rooms[code]);
-    socket.emit("roomCreated", code);
+    rooms[roomCode] = {
+      players: [{ id: socket.id, name: playerName }],
+    };
+
+    socket.join(roomCode);
+
+    cb({
+      roomCode,
+      players: rooms[roomCode].players,
+    });
+
+    console.log("🎮 Room created:", roomCode);
   });
 
-  socket.on("joinRoom", ({ code, name }) => {
-    if (!rooms[code] || rooms[code].started) return;
-    rooms[code].players[socket.id] = { name, time: 0, finished: false };
-    socket.join(code);
-    io.to(code).emit("updateLobby", rooms[code]);
+  // JOIN GAME
+  socket.on("joinGame", ({ roomCode, playerName }, cb) => {
+    const room = rooms[roomCode];
+
+    if (!room) {
+      return cb({ error: "Room not found" });
+    }
+
+    if (room.players.length >= 10) {
+      return cb({ error: "Room full" });
+    }
+
+    room.players.push({ id: socket.id, name: playerName });
+    socket.join(roomCode);
+
+    io.to(roomCode).emit("playersUpdated", room.players);
+
+    cb({ players: room.players });
   });
 
-  socket.on("startGame", code => {
-    if (!rooms[code]) return;
-    rooms[code].started = true;
-    io.to(code).emit("gameStarted");
-  });
-
-  socket.on("finish", ({ code, time }) => {
-    if (!rooms[code]) return;
-    rooms[code].players[socket.id].time = time;
-    rooms[code].players[socket.id].finished = true;
-    io.to(code).emit("updateResults", rooms[code]);
-  });
-
+  // DISCONNECT
   socket.on("disconnect", () => {
-    for (let code in rooms) {
-      if (rooms[code].players[socket.id]) {
-        delete rooms[code].players[socket.id];
-        io.to(code).emit("updateLobby", rooms[code]);
+    for (const roomCode in rooms) {
+      rooms[roomCode].players = rooms[roomCode].players.filter(
+        (p) => p.id !== socket.id
+      );
+
+      io.to(roomCode).emit("playersUpdated", rooms[roomCode].players);
+
+      if (rooms[roomCode].players.length === 0) {
+        delete rooms[roomCode];
       }
     }
-  });
 
+    console.log("🔴 Player disconnected:", socket.id);
+  });
 });
 
-server.listen(process.env.PORT || 4000, () => console.log("Server running on port 4000"));
+server.listen(3001, () => {
+  console.log("🚀 Socket server running on http://localhost:3001");
+});
